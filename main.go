@@ -24,14 +24,14 @@ type configuration struct {
 }
 
 func main() {
-	configFile, err := os.ReadFile("config.yaml")
+	configFile, err := os.ReadFile("ports.yaml")
 	if err != nil {
-		log.Fatalf("Cannot read config.yaml: %v", err)
+		log.Fatalf("Cannot read ports.yaml: %v", err)
 	}
 
 	var config configuration
 	if err := yaml.Unmarshal(configFile, &config); err != nil {
-		log.Fatalf("Cannot parse config.yaml: %v", err)
+		log.Fatalf("Cannot parse ports.yaml: %v", err)
 	}
 
 	pool := &ServerPool{}

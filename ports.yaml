@@ -1,7 +1,7 @@
 load_balancer:
   port: 8080
 backend_settings:
-  default_ttl: "20s"
+  default_ttl: "30s"
   max_ttl: "60s"
 backends:
   - port: 8081
