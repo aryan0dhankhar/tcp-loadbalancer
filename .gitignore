@@ -1,0 +1,19 @@
+# Build artifacts
+*.exe
+*.out
+*.test
+/bin/
+dist/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# IDE settings
+.vscode/
+.idea/
+
+# Design files
+plan.md

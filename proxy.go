@@ -19,11 +19,12 @@ func HandleConnection(clientConn net.Conn, pool *ServerPool) {
 		return
 	}
 
-	backend := pool.GetNextPeer()
+	backend := pool.GetNextAvailablePeer()
 	if backend == nil {
-		log.Printf("Cannot proxy connection: no healthy backend available")
+		log.Printf("Cannot proxy connection: no available backend port")
 		return
 	}
+	defer backend.Release()
 
 	backendConn, err := net.Dial("tcp", backend.URL)
 	if err != nil {

@@ -2,31 +2,46 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log"
 	"net"
+	"os"
 	"strconv"
-	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
+type configuration struct {
+	LoadBalancer struct {
+		Port int `yaml:"port"`
+	} `yaml:"load_balancer"`
+	BackendSettings struct {
+		DefaultTTL string `yaml:"default_ttl"`
+		MaxTTL     string `yaml:"max_ttl"`
+	} `yaml:"backend_settings"`
+	Backends []struct {
+		Port int `yaml:"port"`
+	} `yaml:"backends"`
+}
+
 func main() {
-	port := flag.Int("port", 8080, "port for the load balancer to listen on")
-	backendList := flag.String("backends", "http://localhost:8081,http://localhost:8082,http://localhost:8083", "comma-separated backend URLs")
-	flag.Parse()
+	configFile, err := os.ReadFile("config.yaml")
+	if err != nil {
+		log.Fatalf("Cannot read config.yaml: %v", err)
+	}
+
+	var config configuration
+	if err := yaml.Unmarshal(configFile, &config); err != nil {
+		log.Fatalf("Cannot parse config.yaml: %v", err)
+	}
 
 	pool := &ServerPool{}
-	for _, url := range strings.Split(*backendList, ",") {
-		url = strings.TrimSpace(url)
-		url = strings.TrimPrefix(url, "http://")
-		url = strings.TrimPrefix(url, "https://")
-		if url != "" {
-			pool.AddBackend(&Backend{URL: url})
-		}
+	for _, backend := range config.Backends {
+		pool.AddBackend(&Backend{URL: "localhost:" + strconv.Itoa(backend.Port)})
 	}
 
 	go HealthCheck(context.Background(), pool)
 
-	listenAddress := "localhost:" + strconv.Itoa(*port)
+	listenAddress := "localhost:" + strconv.Itoa(config.LoadBalancer.Port)
 	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		log.Fatalf("Cannot start listener: %v", err)

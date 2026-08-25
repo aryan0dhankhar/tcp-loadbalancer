@@ -28,7 +28,25 @@ func (pool *ServerPool) GetNextPeer() *Backend {
 	startIndex := pool.NextIndex() % backendCount
 	for offset := 0; offset < backendCount; offset++ {
 		backend := pool.Backends[(startIndex+offset)%backendCount]
-		if backend.IsAlive() {
+		if backend != nil && backend.IsAlive() {
+			return backend
+		}
+	}
+
+	return nil
+}
+
+// GetNextAvailablePeer returns and reserves the next healthy, unused backend.
+func (pool *ServerPool) GetNextAvailablePeer() *Backend {
+	backendCount := len(pool.Backends)
+	if backendCount == 0 {
+		return nil
+	}
+
+	startIndex := pool.NextIndex() % backendCount
+	for offset := 0; offset < backendCount; offset++ {
+		backend := pool.Backends[(startIndex+offset)%backendCount]
+		if backend != nil && backend.TryAcquire() {
 			return backend
 		}
 	}

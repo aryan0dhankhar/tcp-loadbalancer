@@ -40,6 +40,7 @@ func HealthCheck(ctx context.Context, pool *ServerPool) {
 					continue
 				}
 
+				_, _ = connection.Write([]byte("HEALTH\n"))
 				connection.Close()
 				if !backend.IsAlive() {
 					log.Printf("Backend %s is up", backend.URL)

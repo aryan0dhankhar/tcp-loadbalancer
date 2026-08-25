@@ -1,21 +1,88 @@
 package main
 
 import (
-	"flag"
+	"bufio"
 	"log"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-func runBackend(address, message string, waitGroup *sync.WaitGroup) {
+type configuration struct {
+	BackendSettings struct {
+		DefaultTTL string `yaml:"default_ttl"`
+		MaxTTL     string `yaml:"max_ttl"`
+	} `yaml:"backend_settings"`
+	Backends []struct {
+		Port int `yaml:"port"`
+	} `yaml:"backends"`
+}
+
+func handleProcess(connection net.Conn, port, defaultTTL, maxTTL string) {
+	defer connection.Close()
+
+	reader := bufio.NewReader(connection)
+	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+	request, _ := reader.ReadString('\n')
+	_ = connection.SetReadDeadline(time.Time{})
+
+	requestLine := strings.TrimSpace(request)
+	if strings.HasPrefix(requestLine, "HEALTH") {
+		_, _ = connection.Write([]byte("HEALTHY\n"))
+		return
+	}
+
+	requestedTTL := strings.TrimSpace(strings.TrimPrefix(requestLine, "TTL="))
+	if requestedTTL == "" {
+		requestedTTL = defaultTTL
+	}
+
+	calculatedTTL, err := time.ParseDuration(requestedTTL)
+	if err != nil {
+		log.Printf("Invalid TTL %q for backend %s; using default %s", requestedTTL, port, defaultTTL)
+		calculatedTTL, err = time.ParseDuration(defaultTTL)
+		if err != nil {
+			log.Printf("Invalid default TTL %q; closing process on port %s", defaultTTL, port)
+			return
+		}
+	}
+
+	maximumTTL, err := time.ParseDuration(maxTTL)
+	if err == nil && calculatedTTL > maximumTTL {
+		calculatedTTL = maximumTTL
+	}
+
+	_, _ = connection.Write([]byte("Process assigned to port " + port + ". TTL set to " + calculatedTTL.String() + "\n"))
+	ttlTimer := time.NewTimer(calculatedTTL)
+	defer ttlTimer.Stop()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ttlTimer.C:
+			_, _ = connection.Write([]byte("TTL expired. Kernel freeing process resources...\n"))
+			return
+		case <-ticker.C:
+			if _, err := connection.Write([]byte("Process running...\n")); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func runBackend(address, port, defaultTTL, maxTTL string, waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
 
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		log.Fatalf("Cannot start backend on %s: %v", address, err)
 	}
-	defer listener.Close()
 
 	log.Printf("Backend listening on %s", address)
 	for {
@@ -25,29 +92,26 @@ func runBackend(address, message string, waitGroup *sync.WaitGroup) {
 			continue
 		}
 
-		go func(connection net.Conn) {
-			defer connection.Close()
-			if _, err := connection.Write([]byte(message)); err != nil {
-				log.Printf("Cannot write response from %s: %v", address, err)
-			}
-		}(connection)
+		go handleProcess(connection, port, defaultTTL, maxTTL)
 	}
 }
 
 func main() {
-	ports := flag.String("ports", "8081,8082,8083", "comma-separated backend ports")
-	flag.Parse()
+	configFile, err := os.ReadFile("config.yaml")
+	if err != nil {
+		log.Fatalf("Cannot read config.yaml: %v", err)
+	}
 
-	backendPorts := strings.Split(*ports, ",")
+	var config configuration
+	if err := yaml.Unmarshal(configFile, &config); err != nil {
+		log.Fatalf("Cannot parse config.yaml: %v", err)
+	}
+
 	var waitGroup sync.WaitGroup
-	for _, port := range backendPorts {
-		port = strings.TrimSpace(port)
-		if port == "" {
-			continue
-		}
-
+	for _, backend := range config.Backends {
+		port := strconv.Itoa(backend.Port)
 		waitGroup.Add(1)
-		go runBackend("localhost:"+port, "Hello from backend "+port+"\n", &waitGroup)
+		go runBackend("localhost:"+port, port, config.BackendSettings.DefaultTTL, config.BackendSettings.MaxTTL, &waitGroup)
 	}
 
 	waitGroup.Wait()
