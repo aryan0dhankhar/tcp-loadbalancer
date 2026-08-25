@@ -1,8 +1,10 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"net"
+	"strings"
 	"sync"
 )
 
@@ -33,12 +35,20 @@ func runBackend(address, message string, waitGroup *sync.WaitGroup) {
 }
 
 func main() {
-	var waitGroup sync.WaitGroup
-	waitGroup.Add(3)
+	ports := flag.String("ports", "8081,8082,8083", "comma-separated backend ports")
+	flag.Parse()
 
-	go runBackend("localhost:8081", "Hello from backend 8081\n", &waitGroup)
-	go runBackend("localhost:8082", "Hello from backend 8082\n", &waitGroup)
-	go runBackend("localhost:8083", "Hello from backend 8083\n", &waitGroup)
+	backendPorts := strings.Split(*ports, ",")
+	var waitGroup sync.WaitGroup
+	for _, port := range backendPorts {
+		port = strings.TrimSpace(port)
+		if port == "" {
+			continue
+		}
+
+		waitGroup.Add(1)
+		go runBackend("localhost:"+port, "Hello from backend "+port+"\n", &waitGroup)
+	}
 
 	waitGroup.Wait()
 }

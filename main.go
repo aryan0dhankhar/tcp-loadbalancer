@@ -2,31 +2,38 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net"
+	"strconv"
+	"strings"
 )
 
 func main() {
-	pool := &ServerPool{}
-	backendURLs := []string{
-		"localhost:8081",
-		"localhost:8082",
-		"localhost:8083",
-	}
+	port := flag.Int("port", 8080, "port for the load balancer to listen on")
+	backendList := flag.String("backends", "http://localhost:8081,http://localhost:8082,http://localhost:8083", "comma-separated backend URLs")
+	flag.Parse()
 
-	for _, url := range backendURLs {
-		pool.AddBackend(&Backend{URL: url})
+	pool := &ServerPool{}
+	for _, url := range strings.Split(*backendList, ",") {
+		url = strings.TrimSpace(url)
+		url = strings.TrimPrefix(url, "http://")
+		url = strings.TrimPrefix(url, "https://")
+		if url != "" {
+			pool.AddBackend(&Backend{URL: url})
+		}
 	}
 
 	go HealthCheck(context.Background(), pool)
 
-	listener, err := net.Listen("tcp", "localhost:8080")
+	listenAddress := "localhost:" + strconv.Itoa(*port)
+	listener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		log.Fatalf("Cannot start listener: %v", err)
 	}
 	defer listener.Close()
 
-	log.Printf("Load balancer listening on localhost:8080")
+	log.Printf("Load balancer listening on %s", listenAddress)
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
