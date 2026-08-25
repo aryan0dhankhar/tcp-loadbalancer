@@ -34,24 +34,34 @@ func HandleConnection(clientConn net.Conn, pool *ServerPool) {
 	defer backendConn.Close()
 
 	var waitGroup sync.WaitGroup
-	copyDone := make(chan struct{}, 2)
+	copyDone := make(chan string, 2)
 	waitGroup.Add(2)
 
 	go func() {
 		defer waitGroup.Done()
 		_, _ = io.Copy(backendConn, clientConn)
-		copyDone <- struct{}{}
+		copyDone <- "client"
 	}()
 
 	go func() {
 		defer waitGroup.Done()
 		_, _ = io.Copy(clientConn, backendConn)
-		copyDone <- struct{}{}
+		copyDone <- "backend"
 	}()
 
-	// Closing both connections unblocks the other copy when either direction ends.
-	<-copyDone
-	clientConn.Close()
-	backendConn.Close()
+	// Preserve the other direction after an input EOF so request/response traffic
+	// can still return its response before both connections are closed.
+	if completed := <-copyDone; completed == "client" {
+		closeWrite(backendConn)
+	} else {
+		closeWrite(clientConn)
+		backendConn.Close()
+	}
 	waitGroup.Wait()
+}
+
+func closeWrite(connection net.Conn) {
+	if tcpConnection, ok := connection.(*net.TCPConn); ok {
+		_ = tcpConnection.CloseWrite()
+	}
 }

@@ -16,7 +16,6 @@ type configuration struct {
 	} `yaml:"load_balancer"`
 	BackendSettings struct {
 		DefaultTTL string `yaml:"default_ttl"`
-		MaxTTL     string `yaml:"max_ttl"`
 	} `yaml:"backend_settings"`
 	Backends []struct {
 		Port int `yaml:"port"`

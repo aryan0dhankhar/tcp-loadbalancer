@@ -1,10 +1,10 @@
 load_balancer:
   port: 8080
 backend_settings:
-  default_ttl: "30s"
-  max_ttl: "60s"
+  default_ttl: "90s"
 backends:
-  - port: 8081
-  - port: 8082
-  - port: 8083
-  - port: 8084
+  - port: 9001
+  - port: 9002
+  - port: 9003
+  - port: 9004
+  - port: 9005

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,7 +18,6 @@ import (
 type configuration struct {
 	BackendSettings struct {
 		DefaultTTL string `yaml:"default_ttl"`
-		MaxTTL     string `yaml:"max_ttl"`
 	} `yaml:"backend_settings"`
 	Backends []struct {
 		Port int `yaml:"port"`
@@ -28,14 +28,20 @@ var nextProcessID uint64
 
 type processRegistry struct {
 	mu          sync.RWMutex
-	connections map[uint64]net.Conn
+	connections map[uint64]process
 }
 
-var activeProcesses = processRegistry{connections: make(map[uint64]net.Conn)}
+type process struct {
+	id         uint64
+	port       string
+	connection net.Conn
+}
 
-func (registry *processRegistry) add(id uint64, connection net.Conn) {
+var activeProcesses = processRegistry{connections: make(map[uint64]process)}
+
+func (registry *processRegistry) add(process process) {
 	registry.mu.Lock()
-	registry.connections[id] = connection
+	registry.connections[process.id] = process
 	registry.mu.Unlock()
 }
 
@@ -48,20 +54,45 @@ func (registry *processRegistry) remove(id uint64) {
 // CloseProcess forcefully closes an active process connection by its ID.
 func CloseProcess(id uint64) bool {
 	activeProcesses.mu.RLock()
-	connection, exists := activeProcesses.connections[id]
+	activeProcess, exists := activeProcesses.connections[id]
 	activeProcesses.mu.RUnlock()
 	if !exists {
 		return false
 	}
 
-	return connection.Close() == nil
+	return activeProcess.connection.Close() == nil
 }
 
-func handleProcess(connection net.Conn, port, defaultTTL, maxTTL string) {
+func statusMessage() string {
+	activeProcesses.mu.RLock()
+	processes := make([]process, 0, len(activeProcesses.connections))
+	for _, activeProcess := range activeProcesses.connections {
+		processes = append(processes, activeProcess)
+	}
+	activeProcesses.mu.RUnlock()
+
+	sort.Slice(processes, func(first, second int) bool {
+		firstPort, _ := strconv.Atoi(processes[first].port)
+		secondPort, _ := strconv.Atoi(processes[second].port)
+		return firstPort < secondPort
+	})
+
+	var builder strings.Builder
+	for _, activeProcess := range processes {
+		builder.WriteString("Process ")
+		builder.WriteString(strconv.FormatUint(activeProcess.id, 10))
+		builder.WriteString(" on port ")
+		builder.WriteString(activeProcess.port)
+		builder.WriteByte('\n')
+	}
+	if builder.Len() == 0 {
+		return "No active processes\n"
+	}
+	return builder.String()
+}
+
+func handleProcess(connection net.Conn, port, defaultTTL string) {
 	defer connection.Close()
-	processID := atomic.AddUint64(&nextProcessID, 1)
-	activeProcesses.add(processID, connection)
-	defer activeProcesses.remove(processID)
 
 	reader := bufio.NewReader(connection)
 	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
@@ -73,26 +104,20 @@ func handleProcess(connection net.Conn, port, defaultTTL, maxTTL string) {
 		_, _ = connection.Write([]byte("HEALTHY\n"))
 		return
 	}
-
-	requestedTTL := strings.TrimSpace(strings.TrimPrefix(requestLine, "TTL="))
-	if requestedTTL == "" {
-		requestedTTL = defaultTTL
+	if requestLine == "STATUS" {
+		_, _ = connection.Write([]byte(statusMessage()))
+		return
 	}
 
-	calculatedTTL, err := time.ParseDuration(requestedTTL)
+	calculatedTTL, err := time.ParseDuration(defaultTTL)
 	if err != nil {
-		log.Printf("Invalid TTL %q for backend %s; using default %s", requestedTTL, port, defaultTTL)
-		calculatedTTL, err = time.ParseDuration(defaultTTL)
-		if err != nil {
-			log.Printf("Invalid default TTL %q; closing process on port %s", defaultTTL, port)
-			return
-		}
+		log.Printf("Invalid default TTL %q; closing process on port %s", defaultTTL, port)
+		return
 	}
 
-	maximumTTL, err := time.ParseDuration(maxTTL)
-	if err == nil && calculatedTTL > maximumTTL {
-		calculatedTTL = maximumTTL
-	}
+	processID := atomic.AddUint64(&nextProcessID, 1)
+	activeProcesses.add(process{id: processID, port: port, connection: connection})
+	defer activeProcesses.remove(processID)
 
 	log.Printf("Process %d assigned to port %s with TTL %s", processID, port, calculatedTTL)
 	_, _ = connection.Write([]byte("Process " + strconv.FormatUint(processID, 10) + " assigned to port " + port + ". TTL set to " + calculatedTTL.String() + "\n"))
@@ -103,7 +128,7 @@ func handleProcess(connection net.Conn, port, defaultTTL, maxTTL string) {
 	log.Printf("Process %d on port %s expired", processID, port)
 }
 
-func runBackend(address, port, defaultTTL, maxTTL string, waitGroup *sync.WaitGroup) {
+func runBackend(address, port, defaultTTL string, waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
 
 	listener, err := net.Listen("tcp", address)
@@ -119,7 +144,7 @@ func runBackend(address, port, defaultTTL, maxTTL string, waitGroup *sync.WaitGr
 			continue
 		}
 
-		go handleProcess(connection, port, defaultTTL, maxTTL)
+		go handleProcess(connection, port, defaultTTL)
 	}
 }
 
@@ -138,7 +163,7 @@ func main() {
 	for _, backend := range config.Backends {
 		port := strconv.Itoa(backend.Port)
 		waitGroup.Add(1)
-		go runBackend("localhost:"+port, port, config.BackendSettings.DefaultTTL, config.BackendSettings.MaxTTL, &waitGroup)
+		go runBackend("localhost:"+port, port, config.BackendSettings.DefaultTTL, &waitGroup)
 	}
 
 	waitGroup.Wait()
